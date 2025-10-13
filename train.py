@@ -15,7 +15,7 @@ from mmdet.core import DistEvalHook, EvalHook
 from mmdet3d.datasets import build_dataset
 from mmdet3d.models import build_model
 from loaders.builder import build_dataloader
-
+from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description='Train a detector')
@@ -39,7 +39,7 @@ def main():
     logger_initialized['root'] = logging.Logger(__name__, logging.WARNING)
     logger_initialized['mmcv'] = logging.Logger(__name__, logging.WARNING)
     logger_initialized['mmdet3d'] = logging.Logger(__name__, logging.WARNING)
-
+    default_name = f"{Path(args.config).stem}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     # you need GPUs
     assert torch.cuda.is_available()
 
@@ -60,10 +60,11 @@ def main():
             work_dir = os.path.dirname(cfgs.resume_from)
         else:
             run_name = ''
-            if not cfgs.debug:
-                run_name = input('Name your run (leave blank for default): ')
-            if run_name == '':
-                run_name = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+            run_name = default_name
+            # if not cfgs.debug:
+            #     run_name = input('Name your run (leave blank for default): ')
+            # if run_name == '':
+            #     run_name = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
 
             work_dir = os.path.join('outputs', cfgs.model.type, run_name)
             if os.path.exists(work_dir):  # must be an empty dir
