@@ -6,7 +6,7 @@ from pyquaternion import Quaternion
 from nuscenes.nuscenes import NuScenes
 
 def _norm_rel(p, data_root):
-    p = p.replace('\\','/')
+    p = p.replace('\\', '/')
     data_root = data_root.replace('\\','/').rstrip('/')
     if p.startswith('./'): p = p[2:]
     if p.startswith(data_root + '/'): p = p[len(data_root)+1:]
@@ -17,23 +17,22 @@ class CustomNuScenesDataset(NuScenesDataset):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        # If your PKL already includes per-cam 'sample_data_token', you can skip this block.
-        # Otherwise, build a quick filename→token map once so we can recover tokens.
         meta = getattr(self, 'metadata', {}) or {}
         version = meta.get('version', 'v1.0-trainval')
         self._nusc = NuScenes(version=version, dataroot=self.data_root, verbose=False)
 
+        # map camera filename → sample_data token
         self._cam_filename2token = {}
         for sd in self._nusc.sample_data:
             if sd['sensor_modality'] != 'camera':
                 continue
             rel = sd['filename'].replace('\\','/')
             self._cam_filename2token[rel] = sd['token']
-        
+
+        # stable camera order (match your model)
         if not hasattr(self, 'camera_order'):
-            self.camera_order = ['CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
-                                 'CAM_BACK', 'CAM_BACK_RIGHT', 'CAM_BACK_LEFT']
+            self.camera_order = ['CAM_FRONT','CAM_FRONT_RIGHT','CAM_FRONT_LEFT',
+                                 'CAM_BACK','CAM_BACK_RIGHT','CAM_BACK_LEFT']
         
     def collect_sweeps(self, index, into_past=60, into_future=60):
         all_sweeps_prev = []

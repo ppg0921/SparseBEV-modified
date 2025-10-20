@@ -7,43 +7,45 @@ from numpy import random
 
 
 class GridMask(nn.Module):
-    def __init__(self, ratio=0.5, prob=0.7):
-        super(GridMask, self).__init__()
+    def __init__(self, ratio: float = 0.5, prob: float = 0.7):
+        """
+        ratio: thickness / period (0..1)
+        prob:  apply probability during training
+        """
+        super().__init__()
         self.ratio = ratio
         self.prob = prob
 
-    def forward(self, x):
-        if np.random.rand() > self.prob or not self.training:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [N, C, H, W]
+        if (not self.training) or self.prob <= 0.0 or torch.rand(()) > self.prob:
             return x
 
-        n, c, h, w = x.size()
-        x = x.view(-1, h, w)
-        hh = int(1.5 * h)
-        ww = int(1.5 * w)
+        N, C, H, W = x.shape
+        device, dtype = x.device, x.dtype
 
-        d = np.random.randint(2, h)
-        l = min(max(int(d * self.ratio + 0.5), 1), d - 1)
-        mask = np.ones((hh, ww), np.uint8)
-        st_h = np.random.randint(d)
-        st_w = np.random.randint(d)
+        # Pick a grid period d ∈ [2, max(3, min(H, W))]; clamp thickness l to [1, d-1]
+        d_max = max(3, min(H, W))
+        d = int(torch.randint(low=2, high=d_max + 1, size=(1,), device=device))
+        l = max(1, min(int(d * self.ratio + 0.5), d - 1))
 
-        for i in range(hh // d):
-            s = d*i + st_h
-            t = min(s + l, hh)
-            mask[s:t, :] = 0
+        # Random phase offsets
+        off_y = int(torch.randint(0, d, (1,), device=device))
+        off_x = int(torch.randint(0, d, (1,), device=device))
 
-        for i in range(ww // d):
-            s = d*i + st_w
-            t = min(s + l, ww)
-            mask[:, s:t] = 0
+        # Build a spatial (H, W) mask using modulo — no OOB indexing
+        yy = torch.arange(H, device=device).view(H, 1).expand(H, W)
+        xx = torch.arange(W, device=device).view(1, W).expand(H, W)
 
-        mask = mask[(hh-h)//2:(hh-h)//2+h, (ww-w)//2:(ww-w)//2+w]
-        mask = torch.tensor(mask, dtype=x.dtype, device=x.device)
-        mask = 1 - mask
-        mask = mask.expand_as(x)
-        x = x * mask 
+        stripe_y = ((yy - off_y) % d) < l  # True where we drop rows
+        stripe_x = ((xx - off_x) % d) < l  # True where we drop cols
 
-        return x.view(n, c, h, w)
+        drop = (stripe_y | stripe_x).to(dtype)  # 1 = drop, 0 = keep
+        keep = 1.0 - drop                       # 1 = keep, 0 = drop
+
+        # Broadcast over batch & channels
+        keep = keep.view(1, 1, H, W)
+        return x * keep
 
 
 def rotation_3d_in_axis(points, angles):

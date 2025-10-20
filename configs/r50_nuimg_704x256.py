@@ -52,7 +52,7 @@ img_norm_cfg = dict(
 model = dict(
     type='SparseBEV',
     data_aug=dict(
-        img_color_aug=True,  # Move some augmentations to GPU
+        img_color_aug=False,  # Move some augmentations to GPU
         img_norm_cfg=img_norm_cfg,
         img_pad_cfg=dict(size_divisor=32)),
     stop_prev_grad=0,
@@ -126,14 +126,14 @@ train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
     dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1),
     dict(type='SetFourthChanRoot', dataroot='data/nuscenes'),
-    dict(type='AddFourthChannelFromNPZ', normalize=True, mean=0.0, std=1.0),
+    dict(type='AddFourthChannelFromNPZ', npz_key='depth', normalize=True, mean=0.0, std=1.0),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
     dict(type='GlobalRotScaleTransImage', rot_range=[-0.3925, 0.3925], scale_ratio_range=[0.95, 1.05]),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'points'], meta_keys=(
+    dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'], meta_keys=(
         'filename', 'ori_shape', 'img_shape', 'pad_shape', 'lidar2img', 
         'img_timestamp', 'box_type_3d', 'cam_tokens','cam_names'))
 ]
@@ -142,9 +142,7 @@ test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
     dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True),
     dict(type='SetFourthChanRoot', dataroot='data/nuscenes'),
-    dict(type='AddFourthChannelFromNPZ', normalize=True, mean=0.0, std=1.0),
-    dict(type='SetFourthChanPathFmt', path_fmt='data/nuscenes/lidar4c/{token}_{cam}.npz'),
-    dict(type='AddLidarFourthChannelFromNPZ', normalize=True, mean=0.0, std=1.0),
+    dict(type='AddFourthChannelFromNPZ', npz_key='depth', normalize=True, mean=0.0, std=1.0),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(
         type='MultiScaleFlipAug3D',
@@ -153,7 +151,7 @@ test_pipeline = [
         flip=False,
         transforms=[
             dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
-            dict(type='Collect3D', keys=['img', 'points'], meta_keys=(
+            dict(type='Collect3D', keys=['img'], meta_keys=(
                 'filename', 'box_type_3d', 'ori_shape', 'img_shape', 'pad_shape',
                 'lidar2img', 'img_timestamp', 'cam_tokens','cam_names'))
         ])
@@ -223,7 +221,7 @@ batch_size = 8
 # revise_keys = [('backbone', 'img_backbone')]
 
 load_from = '/home/juntingd/betty/SparseBEV/outputs/SparseBEV/r50_nuimg_704x256-20251006-030807/epoch_24_no_backbone.pth'
-
+revise_keys = None
 
 # resume the last training
 resume_from = None

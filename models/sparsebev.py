@@ -45,9 +45,13 @@ class SparseBEV(MVXTwoStageDetector):
 
     @auto_fp16(apply_to=('img'), out_fp32=True)
     def extract_img_feat(self, img):
+        assert img.dim() == 4, f"grid_mask input must be NCHW, got {img.shape}"
         if self.use_grid_mask:
             img = self.grid_mask(img)
 
+        assert torch.isfinite(img).all(), f"non-finite in img: min={img.nanmin()} max={img.nanmax()}"
+        # print('backbone input:', img.shape, img.dtype, img.min().item(), img.max().item())
+        img = img.contiguous()
         img_feats = self.img_backbone(img)
 
         if isinstance(img_feats, dict):
@@ -67,23 +71,92 @@ class SparseBEV(MVXTwoStageDetector):
         B, N, C, H, W = img.size()
         img = img.view(B * N, C, H, W)
         img = img.float()
-
+        assert C in (3, 4), f"Unexpected C={C}"
+        if C == 3:
+            print("[WARN] Got 3-channel sample during training; 4th channel not appended for some item.")
+        # print(f"image.shape = {img.shape}")
         # move some augmentations to GPU
         if self.data_aug is not None:
             if 'img_color_aug' in self.data_aug and self.data_aug['img_color_aug'] and self.training:
-                img = self.color_aug(img)
-
+                # img = self.color_aug(img)
+                if C >= 3:
+                    # img_rgb = img[:, :3, :, :]
+                    rgb = self.color_aug(img[:, :3, :, :])
+                    img = torch.cat([rgb, img[:, 3:, :, :]], dim=1)
             if 'img_norm_cfg' in self.data_aug:
                 img_norm_cfg = self.data_aug['img_norm_cfg']
+                if img.dim() != 4:
+                    raise RuntimeError(f"Expected NCHW or NHWC, got shape {img.shape}")
 
-                norm_mean = torch.tensor(img_norm_cfg['mean'], device=img.device)
-                norm_std = torch.tensor(img_norm_cfg['std'], device=img.device)
+                if img.shape[1] in (3, 4):
+                    # NCHW
+                    ch_dim = 1
+                elif img.shape[-1] in (3, 4):
+                    # NHWC -> convert to NCHW
+                    img = img.permute(0, 3, 1, 2).contiguous()
+                    ch_dim = 1
+                else:
+                    raise RuntimeError(f"Cannot find channel dim (3 or 4) in shape {img.shape}")
 
-                if img_norm_cfg['to_rgb']:
-                    img = img[:, [2, 1, 0], :, :]  # BGR to RGB
+                # now guaranteed NCHW
+                if img.shape[1] not in (3, 4) and img.shape[-1] in (3, 4):
+                    img = img.permute(0, 3, 1, 2).contiguous()
+                # print(f"img.shape = {img.shape}")
+                C_init = img.shape[1]  # keep the original channel count (expect 4)
+                # print(f"Cinit = {C_init}")
+                # === RGB-only color aug, preserving extra channels ===
+                if self.data_aug.get('img_color_aug', False) and self.training and C_init >= 3:
+                    # take a CONTIGUOUS copy of the RGB slice for the aug (avoid in-place on a view)
+                    rgb_in = img[:, :3, :, :].contiguous()
+                    rgb_out = self.color_aug(rgb_in)
+                    # slice the tail from the SAME pre-aug tensor using C_init to avoid accidental shrink
+                    tail = img[:, 3:C_init, :, :] if C_init > 3 else None
+                    img = torch.cat([rgb_out, tail], dim=1) if tail is not None else rgb_out
+                # print(f"img.shape after augmentation = {img.shape}")
+                # After aug, guarantee channel count
+                C_now = img.shape[1]
+                # print(f"C_now = {C_now}")
+                if C_init == 4 and C_now == 3:
+                    # recover: append a zero channel so normalization stays consistent
+                    H, W = img.shape[2], img.shape[3]
+                    zero = torch.zeros((img.size(0), 1, H, W), device=img.device, dtype=img.dtype)
+                    img = torch.cat([img, zero], dim=1)
+                    C_now = 4
+                # print(f"C_now = {C_now}")
+                # print(f"img.shape = {img.shape}")
+                # === Normalization (pad mean/std to C_now) ===
+                cfg = self.data_aug['img_norm_cfg']
+                mean = torch.as_tensor(cfg['mean'], device=img.device, dtype=img.dtype)
+                std  = torch.as_tensor(cfg['std'],  device=img.device, dtype=img.dtype)
+                if mean.numel() < C_now:
+                    mean = torch.cat([mean, torch.zeros(C_now - mean.numel(), device=img.device, dtype=img.dtype)], 0)
+                if std.numel() < C_now:
+                    std = torch.cat([std, torch.ones(C_now - std.numel(), device=img.device, dtype=img.dtype)], 0)
 
-                img = img - norm_mean.reshape(1, 3, 1, 1)
-                img = img / norm_std.reshape(1, 3, 1, 1)
+                # Safe BGR->RGB swap on first 3 channels only
+                if cfg.get('to_rgb', False) and C_now >= 3:
+                    order = torch.tensor([2, 1, 0] + list(range(3, C_now)), device=img.device, dtype=torch.long)
+                    img = torch.index_select(img, dim=1, index=order)
+
+                img = img - mean.view(1, C_now, 1, 1)
+                img = img / std.view(1, C_now, 1, 1)
+                # norm_mean = torch.tensor(img_norm_cfg['mean'], device=img.device)
+                # norm_std = torch.tensor(img_norm_cfg['std'], device=img.device)
+
+                # if norm_mean.numel() < C:
+                #     norm_mean = torch.cat([norm_mean, torch.zeros(C - norm_mean.numel(), device=img.device, dtype=img.dtype)])
+                # if norm_std.numel() < C:
+                #     norm_std = torch.cat([norm_std, torch.ones(C - norm_std.numel(), device=img.device, dtype=img.dtype)])
+                
+                # # if img_norm_cfg['to_rgb']:
+                # #     img = img[:, [2, 1, 0], :, :]  # BGR to RGB
+                # if img_norm_cfg.get('to_rgb', False) and C >= 3:
+                #     order = torch.tensor([2,1,0] + list(range(3, C)), device=img.device, dtype=torch.long)
+                #     img = torch.index_select(img, dim=1, index=order)
+
+                # img = img - norm_mean.reshape(1, C, 1, 1)
+                # img = img / norm_std.reshape(1, C, 1, 1)
+                
 
             for b in range(B):
                 img_shape = (img.shape[2], img.shape[3], img.shape[1])

@@ -98,14 +98,11 @@ def main():
 
     logging.info('Loading training set from %s' % cfgs.dataset_root)
     train_dataset = build_dataset(cfgs.data.train)
-    sample = train_dataset[0]
-    print(sample.keys())
-    print(sample['img_metas'].data.keys())
-    pts = sample['points']               # BasePoints or tensor depending on packer
-    try:
-        print(getattr(pts, 'tensor', pts).shape)
-    except:
-        pass
+    s = train_dataset.get_data_info(0)
+    print('views:', len(s['img_filename']))
+    print('cam_tokens:', len(s['cam_tokens']))
+    print('first token:', s['cam_tokens'][0])
+    
     train_loader = build_dataloader(
         train_dataset,
         samples_per_gpu=cfgs.batch_size // world_size,
@@ -174,6 +171,10 @@ def main():
     elif cfgs.load_from is not None:
         logging.info('Loading checkpoint from %s' % cfgs.load_from)
         if cfgs.revise_keys is not None:
+            
+            for p_old, p_new in cfgs.revise_keys:
+                state_dict = {k.replace(p_old, p_new): v for k, v in state_dict.items()}
+
             load_checkpoint(
                 model, cfgs.load_from, map_location='cpu',
                 revise_keys=cfgs.revise_keys

@@ -13,15 +13,13 @@ class SetFourthChanRoot:
         results['fourth_root'] = self.dataroot
         return results
 
+
 @PIPELINES.register_module()
 class AddFourthChannelFromNPZ:
-    """
-    Append a 1-channel LiDAR-derived map (H,W) loaded from:
-        {fourth_root}/upsampled/{cam_token}.npz
-    The npz must contain array under key 'arr'.
-    Assumes results contain per-view cam tokens in results['cam_tokens'].
-    """
-    def __init__(self, npz_key='arr', normalize=True, mean=0.0, std=1.0):
+    def __init__(self, npz_key=None, normalize=True, mean=0.0, std=1.0):
+        """
+        npz_key: if None, auto-pick the only array in the archive or common names ['depth','arr','map'].
+        """
         self.npz_key = npz_key
         self.normalize = normalize
         self.mean = float(mean)
@@ -29,24 +27,47 @@ class AddFourthChannelFromNPZ:
 
     def _read_npz(self, p):
         d = np.load(p)
-        a = d[self.npz_key]
+        if self.npz_key is not None:
+            if self.npz_key not in d.files:
+                raise KeyError(f"{self.npz_key} not found in {p}; available: {d.files}")
+            a = d[self.npz_key]
+        else:
+            # auto-pick
+            if len(d.files) == 1:
+                a = d[d.files[0]]
+            else:
+                for k in ('depth', 'arr', 'map', 'channel'):
+                    if k in d.files:
+                        a = d[k]
+                        break
+                else:
+                    raise KeyError(f"No npz_key specified and could not infer from keys {d.files} in {p}")
         if a.ndim == 3 and a.shape[0] == 1:
             a = a[0]
         return a
 
     def __call__(self, results):
-        assert 'img' in results, "Images must be loaded before AddFourthChannelFromNPZ."
-        imgs = results['img']                 # list of HxWx3 np.ndarrays (per view)
+        imgs = results['img']                      # list of images (maybe V or V*T)
         cam_tokens = results.get('cam_tokens', None)
-        assert cam_tokens is not None, "cam_tokens missing; ensure dataset fills cam tokens."
-        base = results.get('fourth_root', '')
+        if cam_tokens is None:
+            raise KeyError("cam_tokens missing; make sure dataset emits it.")
+        n_views = len(cam_tokens)
+        if n_views == 0:
+            raise ValueError("cam_tokens is empty.")
 
-        new_imgs = []
-        paths = []
-        for view_idx, img in enumerate(imgs):
+        base = results.get('fourth_root', '')
+        total = len(imgs)
+
+        # Allow temporal stacking: imgs can be [V] or [V*T]
+        if total % n_views != 0:
+            raise ValueError(f"num imgs ({total}) not a multiple of num views ({n_views}).")
+
+        new_imgs, paths = [], []
+        for i, img in enumerate(imgs):
+            view_idx = i % n_views     # ← key change: wrap per view
             tok = cam_tokens[view_idx]
-            npz_path = os.path.join(base, 'upsampled', f'{tok}.npz')
-            m = self._read_npz(npz_path)      # H0 x W0
+            npz_path = f"{base}/upsampled/{tok}.npz"
+            m = self._read_npz(npz_path)
 
             H, W = img.shape[:2]
             if m.shape[:2] != (H, W):
@@ -56,13 +77,13 @@ class AddFourthChannelFromNPZ:
                 s = self.std if self.std > 0 else (m.std() + 1e-6)
                 m = (m - self.mean) / s
 
-            m = m.astype(img.dtype)[..., None]     # HxWx1
-            img4 = np.concatenate([img, m], axis=2)  # HxWx4
+            m = m.astype(img.dtype)[..., None]      # HxWx1
+            img4 = np.concatenate([img, m], axis=2) # HxWx4
             new_imgs.append(img4)
             paths.append(npz_path)
 
         results['img'] = new_imgs
         results['fourth_paths'] = paths
-        # keep shapes consistent for later transforms
         results['img_shape'] = [im.shape for im in new_imgs]
         return results
+
