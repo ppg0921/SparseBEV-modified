@@ -2,7 +2,7 @@ dataset_type = 'CustomNuScenesDataset'
 dataset_root = 'data/nuscenes/'
 
 input_modality = dict(
-    use_lidar=False,
+    use_lidar=True,
     use_camera=True,
     use_radar=False,
     use_map=False,
@@ -32,8 +32,9 @@ img_backbone = dict(
     type='ResNet',
     depth=50,
     num_stages=4,
+    in_channels=4,
     out_indices=(0, 1, 2, 3),
-    frozen_stages=1,
+    frozen_stages=0,
     norm_cfg=dict(type='BN2d', requires_grad=True),
     norm_eval=True,
     style='pytorch',
@@ -44,8 +45,8 @@ img_neck = dict(
     out_channels=embed_dims,
     num_outs=num_levels)
 img_norm_cfg = dict(
-    mean=[123.675, 116.280, 103.530],
-    std=[58.395, 57.120, 57.375],
+    mean=[123.675, 116.280, 103.530, 0.0],
+    std=[58.395, 57.120, 57.375, 1.0],
     to_rgb=True)
 
 model = dict(
@@ -124,19 +125,26 @@ ida_aug_conf = {
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
     dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1),
+    dict(type='SetFourthChanRoot', dataroot='data/nuscenes'),
+    dict(type='AddFourthChannelFromNPZ', normalize=True, mean=0.0, std=1.0),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
     dict(type='GlobalRotScaleTransImage', rot_range=[-0.3925, 0.3925], scale_ratio_range=[0.95, 1.05]),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'], meta_keys=(
-        'filename', 'ori_shape', 'img_shape', 'pad_shape', 'lidar2img', 'img_timestamp'))
+    dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'points'], meta_keys=(
+        'filename', 'ori_shape', 'img_shape', 'pad_shape', 'lidar2img', 
+        'img_timestamp', 'box_type_3d', 'cam_tokens','cam_names'))
 ]
 
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
     dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True),
+    dict(type='SetFourthChanRoot', dataroot='data/nuscenes'),
+    dict(type='AddFourthChannelFromNPZ', normalize=True, mean=0.0, std=1.0),
+    dict(type='SetFourthChanPathFmt', path_fmt='data/nuscenes/lidar4c/{token}_{cam}.npz'),
+    dict(type='AddLidarFourthChannelFromNPZ', normalize=True, mean=0.0, std=1.0),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(
         type='MultiScaleFlipAug3D',
@@ -145,9 +153,9 @@ test_pipeline = [
         flip=False,
         transforms=[
             dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
-            dict(type='Collect3D', keys=['img'], meta_keys=(
+            dict(type='Collect3D', keys=['img', 'points'], meta_keys=(
                 'filename', 'box_type_3d', 'ori_shape', 'img_shape', 'pad_shape',
-                'lidar2img', 'img_timestamp'))
+                'lidar2img', 'img_timestamp', 'cam_tokens','cam_names'))
         ])
 ]
 
@@ -211,8 +219,11 @@ total_epochs = 24
 batch_size = 8
 
 # load pretrained weights
-load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
-revise_keys = [('backbone', 'img_backbone')]
+# load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
+# revise_keys = [('backbone', 'img_backbone')]
+
+load_from = '/home/juntingd/betty/SparseBEV/outputs/SparseBEV/r50_nuimg_704x256-20251006-030807/epoch_24_no_backbone.pth'
+
 
 # resume the last training
 resume_from = None
@@ -232,5 +243,10 @@ log_config = dict(
 # evaluation
 eval_config = dict(interval=total_epochs)
 
+custom_hooks = [
+    dict(type='FreezeExceptBackboneHook')
+]
+
 # other flags
 debug = False
+

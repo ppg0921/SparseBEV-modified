@@ -16,6 +16,7 @@ from mmdet3d.datasets import build_dataset
 from mmdet3d.models import build_model
 from loaders.builder import build_dataloader
 from pathlib import Path
+from projects.hooks.freeze_except_backbone import FreezeExceptBackboneHook
 
 def main():
     parser = argparse.ArgumentParser(description='Train a detector')
@@ -97,6 +98,14 @@ def main():
 
     logging.info('Loading training set from %s' % cfgs.dataset_root)
     train_dataset = build_dataset(cfgs.data.train)
+    sample = train_dataset[0]
+    print(sample.keys())
+    print(sample['img_metas'].data.keys())
+    pts = sample['points']               # BasePoints or tensor depending on packer
+    try:
+        print(getattr(pts, 'tensor', pts).shape)
+    except:
+        pass
     train_loader = build_dataloader(
         train_dataset,
         samples_per_gpu=cfgs.batch_size // world_size,
