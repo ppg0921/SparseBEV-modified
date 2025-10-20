@@ -51,3 +51,9 @@ checkpoints
 pretrain
 *.png
 *.jpg
+
+*.sh
+**/logs/**
+**/__pycache__/**
+**/outputs/**
+*.pth
